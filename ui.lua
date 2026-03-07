@@ -8,6 +8,7 @@
 
 local BlackwineLib = {}
 BlackwineLib.__index = BlackwineLib
+BlackwineLib._activeWindow = nil
 
 -- ══════════════════════════════════════════════════
 --  Theming System & Palette
@@ -97,6 +98,20 @@ local THEME_PRESETS = {
 		White        = Color3.fromRGB(255, 255, 255),
 	},
 }
+
+local function resolveThemeBase(theme)
+	if type(theme) == "table" then
+		local merged = {}
+		for k, v in pairs(THEME_PRESETS.Dark) do merged[k] = v end
+		for k, v in pairs(theme) do merged[k] = v end
+		return merged, "Custom"
+	end
+
+	local preset = THEME_PRESETS[theme]
+	if preset then
+		return preset, theme
+	end
+end
 
 -- Active palette – starts with Dark theme + wine purple accent
 local DEFAULT_ACCENT = Color3.fromRGB(124, 90, 181)
@@ -204,7 +219,51 @@ function BlackwineLib:CreateWindow(opts)
 	local winTitle = opts.Title or "blackwine"
 	local winSize  = opts.Size  or UDim2.fromOffset(640, 440)
 
-	local W = { Tabs = {}, ActiveTab = nil, SidebarOpen = true, Toggled = true }
+	local W = {
+		Tabs = {},
+		ActiveTab = nil,
+		SidebarOpen = true,
+		Toggled = true,
+		_connections = {},
+		_themeCallbacks = {},
+		_themeName = "Dark",
+		_destroyed = false,
+	}
+
+	local function trackConnection(conn)
+		table.insert(W._connections, conn)
+		return conn
+	end
+
+	local function connect(signal, fn)
+		return trackConnection(signal:Connect(fn))
+	end
+
+	local function onThemeChanged(fn)
+		table.insert(W._themeCallbacks, fn)
+		return fn
+	end
+
+	if BlackwineLib._activeWindow and BlackwineLib._activeWindow ~= W then
+		BlackwineLib._activeWindow:Destroy()
+	end
+
+	if opts.Theme then
+		local base, themeName = resolveThemeBase(opts.Theme)
+		if base then
+			local accent = opts.Accent or PALETTE.Accent
+			local newP = buildPalette(base, accent)
+			for k, v in pairs(newP) do PALETTE[k] = v end
+			W._themeName = themeName
+		end
+		elseif opts.Accent then
+			local al, ad = accentShade(opts.Accent)
+			PALETTE.Accent = opts.Accent
+			PALETTE.AccentLight = al
+			PALETTE.AccentDark = ad
+			PALETTE.Toggle_On = opts.Accent
+			PALETTE.SliderFill = opts.Accent
+	end
 
 	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 	local old = playerGui:FindFirstChild("blackwine_ui")
@@ -232,7 +291,7 @@ function BlackwineLib:CreateWindow(opts)
 		BackgroundColor3 = PALETTE.Surface, BackgroundTransparency = 0.3,
 		BorderSizePixel = 0, Parent = main,
 	})
-	create("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, 0),
+	local topbarDivider = create("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, 0),
 		AnchorPoint = Vector2.new(0, 1), BackgroundColor3 = PALETTE.Divider, BorderSizePixel = 0, Parent = topbar })
 
 	-- Hamburger
@@ -244,12 +303,12 @@ function BlackwineLib:CreateWindow(opts)
 	})
 
 	-- Accent dot
-	create("Frame", { Size = UDim2.fromOffset(4, 4), Position = UDim2.new(0, 42, 0.5, 0),
+	local accentDot = create("Frame", { Name = "accent_dot", Size = UDim2.fromOffset(4, 4), Position = UDim2.new(0, 42, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5), BackgroundColor3 = PALETTE.Accent, BorderSizePixel = 0, Parent = topbar,
 	}, { create("UICorner", { CornerRadius = CORNER_FULL }) })
 
 	-- Title
-	create("TextLabel", {
+	local titleLabel = create("TextLabel", {
 		Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 50, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5), BackgroundTransparency = 1,
 		Text = winTitle, TextColor3 = PALETTE.Text, TextSize = 15,
@@ -270,17 +329,15 @@ function BlackwineLib:CreateWindow(opts)
 		topbar.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 				dragging = true; dragStart = input.Position; startPos = main.Position
-				input.Changed:Connect(function()
+				trackConnection(input.Changed:Connect(function()
 					if input.UserInputState == Enum.UserInputState.End then dragging = false end
-				end)
+				end))
 			end
 		end)
-		UserInputService.InputChanged:Connect(function(input)
+		connect(UserInputService.InputChanged, function(input)
 			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 				local d = input.Position - dragStart
-				tw(main, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y),
-				})
+				main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
 			end
 		end)
 	end
@@ -298,7 +355,7 @@ function BlackwineLib:CreateWindow(opts)
 		BackgroundColor3 = PALETTE.Surface, BackgroundTransparency = 0.5,
 		BorderSizePixel = 0, ClipsDescendants = true, Parent = content,
 	})
-	create("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, 0, 0, 0),
+	local sidebarDivider = create("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, 0, 0, 0),
 		BackgroundColor3 = PALETTE.Divider, BorderSizePixel = 0, Parent = sidebar })
 
 	local tabScroll = create("ScrollingFrame", {
@@ -340,7 +397,7 @@ function BlackwineLib:CreateWindow(opts)
 
 	-- Toggle key
 	local tkey = opts.ToggleKey or Enum.KeyCode.RightShift
-	UserInputService.InputBegan:Connect(function(input, gpe)
+	connect(UserInputService.InputBegan, function(input, gpe)
 		if gpe then return end
 		if input.KeyCode == tkey then gui.Enabled = not gui.Enabled end
 	end)
@@ -423,6 +480,15 @@ function BlackwineLib:CreateWindow(opts)
 		pad(frame, 8, 0, 8, 0)
 		T._frame = frame
 
+		onThemeChanged(function(p)
+			local active = W.ActiveTab == T
+			btn.BackgroundColor3 = p.Accent
+			lbl.TextColor3 = active and p.Text or p.TextDim
+			ico.ImageColor3 = active and p.Text or p.TextDim
+			ind.BackgroundColor3 = p.Accent
+			frame.ScrollBarImageColor3 = p.Divider
+		end)
+
 		-- Two-column holder
 		local cols = create("Frame", {
 			Size = UDim2.new(1, -20, 0, 0), Position = UDim2.new(0.5, 0, 0, 0),
@@ -462,13 +528,14 @@ function BlackwineLib:CreateWindow(opts)
 				BackgroundColor3 = PALETTE.Surface, BackgroundTransparency = 0.4,
 				BorderSizePixel = 0, Parent = parent,
 			})
-			corner(sf, CORNER_MD); stroke(sf, PALETTE.Divider, 1, 0.6)
+			local sfStroke = stroke(sf, PALETTE.Divider, 1, 0.6)
+			corner(sf, CORNER_MD)
 
 			-- Header
 			local hdr = create("Frame", {
 				Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = 0, Parent = sf,
 			})
-			create("TextLabel", {
+			local headerLabel = create("TextLabel", {
 				Size = UDim2.new(1, -16, 1, 0), Position = UDim2.new(0, 12, 0, 0),
 				BackgroundTransparency = 1, Text = sName:upper(),
 				TextColor3 = PALETTE.TextMuted, TextSize = 10, FontFace = FONT,
@@ -485,6 +552,12 @@ function BlackwineLib:CreateWindow(opts)
 
 			local ml = listLayout(sf, 2); ml.HorizontalAlignment = Enum.HorizontalAlignment.Center
 			S._f = sf; S._items = items
+
+			onThemeChanged(function(p)
+				sf.BackgroundColor3 = p.Surface
+				sfStroke.Color = p.Divider
+				headerLabel.TextColor3 = p.TextMuted
+			end)
 
 			--  ╔════════════════════════════════════╗
 			--  ║            COMPONENTS              ║
@@ -503,6 +576,11 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(t) l.Text = t end
 				function obj:SetColor(col) l.TextColor3 = col end
+				if not o.Color then
+					onThemeChanged(function(p)
+						l.TextColor3 = p.TextDim
+					end)
+				end
 				return obj
 			end
 
@@ -517,7 +595,8 @@ function BlackwineLib:CreateWindow(opts)
 					BackgroundTransparency = 0.3, BorderSizePixel = 0, Text = "",
 					AutoButtonColor = false, ClipsDescendants = true, Parent = c,
 				})
-				corner(b, CORNER_SM); stroke(b, PALETTE.Border, 1, 0.6)
+				local bStroke = stroke(b, PALETTE.Border, 1, 0.6)
+				corner(b, CORNER_SM)
 
 				local bl = create("TextLabel", {
 					Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromScale(0.5, 0.5),
@@ -542,6 +621,11 @@ function BlackwineLib:CreateWindow(opts)
 
 				local obj = {}
 				function obj:SetText(t) bl.Text = t end
+				onThemeChanged(function(p)
+					b.BackgroundColor3 = p.SurfaceLight
+					bStroke.Color = p.Border
+					bl.TextColor3 = p.Text
+				end)
 				return obj
 			end
 
@@ -560,7 +644,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(tb, CORNER_SM)
 
-				create("TextLabel", {
+				local toggleLabel = create("TextLabel", {
 					Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 10, 0, 0),
 					BackgroundTransparency = 1, Text = o.Name or "Toggle",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -610,6 +694,12 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) if state == v then return end; state = v; vis(state, true); pcall(cb, state) end
 				function obj:Get() return state end
+				onThemeChanged(function(p)
+					tb.BackgroundColor3 = p.SurfaceLight
+					toggleLabel.TextColor3 = p.Text
+					track.BackgroundColor3 = state and p.Toggle_On or p.Toggle_Off
+					knob.BackgroundColor3 = p.White
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -619,9 +709,11 @@ function BlackwineLib:CreateWindow(opts)
 				o = o or {}
 				local mn, mx = o.Min or 0, o.Max or 100
 				local inc = o.Increment or 1
+				inc = inc > 0 and inc or 1
 				local suf = o.Suffix or ""
 				local cb  = o.Callback or function() end
 				local cur = math.clamp(o.Default or mn, mn, mx)
+				local range = mx - mn
 
 				local c = create("Frame", { Size = UDim2.new(1, 0, 0, COMPONENT_HEIGHT + 16), BackgroundTransparency = 1, Parent = items })
 
@@ -631,7 +723,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(sf, CORNER_SM)
 
-				create("TextLabel", {
+				local sliderLabel = create("TextLabel", {
 					Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 10, 0, 6),
 					BackgroundTransparency = 1, Text = o.Name or "Slider",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -651,7 +743,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(trackF, CORNER_FULL)
 
-				local pct = clamp01((cur - mn) / (mx - mn))
+				local pct = (range == 0) and 1 or clamp01((cur - mn) / range)
 				local fill = create("Frame", {
 					Size = UDim2.new(pct, 0, 1, 0),
 					BackgroundColor3 = PALETTE.SliderFill, BorderSizePixel = 0, Parent = trackF,
@@ -663,7 +755,8 @@ function BlackwineLib:CreateWindow(opts)
 					Position = UDim2.new(pct, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
 					BackgroundColor3 = PALETTE.White, BorderSizePixel = 0, ZIndex = 2, Parent = trackF,
 				})
-				corner(sk, CORNER_FULL); stroke(sk, PALETTE.Accent, 2, 0)
+				local skStroke = stroke(sk, PALETTE.Accent, 2, 0)
+				corner(sk, CORNER_FULL)
 
 				local glow = create("Frame", {
 					Size = UDim2.fromOffset(24, 24), Position = UDim2.fromScale(0.5, 0.5),
@@ -677,7 +770,7 @@ function BlackwineLib:CreateWindow(opts)
 					v = round(mn + round((v - mn) / inc) * inc, 4)
 					v = math.clamp(v, mn, mx)
 					cur = v
-					local p = clamp01((v - mn) / (mx - mn))
+					local p = (range == 0) and 1 or clamp01((v - mn) / range)
 					tw(fill, TWEEN_FAST, { Size = UDim2.new(p, 0, 1, 0) })
 					tw(sk,   TWEEN_FAST, { Position = UDim2.new(p, 0, 0.5, 0) })
 					vl.Text = tostring(v) .. suf
@@ -685,6 +778,7 @@ function BlackwineLib:CreateWindow(opts)
 				end
 
 				local function startSlide(input)
+					if range == 0 then return end
 					tw(glow, TWEEN_FAST, { BackgroundTransparency = 0.7 })
 					tw(sk, TWEEN_FAST, { Size = UDim2.fromOffset(16, 16) })
 					local function upd(pos)
@@ -715,6 +809,16 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) setVal(v, true) end
 				function obj:Get() return cur end
+				onThemeChanged(function(p)
+					sf.BackgroundColor3 = p.SurfaceLight
+					sliderLabel.TextColor3 = p.Text
+					vl.TextColor3 = p.Accent
+					trackF.BackgroundColor3 = p.SliderTrack
+					fill.BackgroundColor3 = p.SliderFill
+					sk.BackgroundColor3 = p.White
+					skStroke.Color = p.Accent
+					glow.BackgroundColor3 = p.Accent
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -739,7 +843,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(hdr, CORNER_SM)
 
-				create("TextLabel", {
+				local dropdownLabel = create("TextLabel", {
 					Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0),
 					BackgroundTransparency = 1, Text = o.Name or "Dropdown",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -758,12 +862,18 @@ function BlackwineLib:CreateWindow(opts)
 					Image = "rbxassetid://6031091004", ImageColor3 = PALETTE.TextDim, Parent = hdr,
 				})
 
-				local dl = create("Frame", {
+				local dl = create("ScrollingFrame", {
 					Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = PALETTE.Surface,
 					BackgroundTransparency = 0.1, BorderSizePixel = 0, ClipsDescendants = true,
+					CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ScrollBarThickness = 2, ScrollBarImageColor3 = PALETTE.Divider,
+					ScrollBarImageTransparency = 0.35,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
 					Visible = false, LayoutOrder = 1, Parent = c,
 				})
-				corner(dl, CORNER_SM); stroke(dl, PALETTE.Border, 1, 0.5)
+				local dlStroke = stroke(dl, PALETTE.Border, 1, 0.5)
+				corner(dl, CORNER_SM)
 
 				local dlc = create("Frame", {
 					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
@@ -772,6 +882,20 @@ function BlackwineLib:CreateWindow(opts)
 				local dll = listLayout(dlc, 1); dll.HorizontalAlignment = Enum.HorizontalAlignment.Center
 				pad(dlc, 4, 4, 4, 4)
 				local cl = listLayout(c, 4); cl.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+				local function refreshDropdownItems(p)
+					for _, ch in ipairs(dlc:GetChildren()) do
+						if ch:IsA("TextButton") then
+							ch.BackgroundColor3 = p.SurfaceLight
+							local lb = ch:FindFirstChildWhichIsA("TextLabel")
+							if lb then
+								local on = lb.Text == sel
+								ch.BackgroundTransparency = on and 0.5 or 1
+								lb.TextColor3 = on and p.Accent or p.Text
+							end
+						end
+					end
+				end
 
 				local function mkItem(txt)
 					local it = create("TextButton", {
@@ -831,16 +955,7 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v)
 					sel = v; selLbl.Text = tostring(v)
-					for _, ch in ipairs(dlc:GetChildren()) do
-						if ch:IsA("TextButton") then
-							local lb = ch:FindFirstChildWhichIsA("TextLabel")
-							if lb then
-								local on = lb.Text == v
-								ch.BackgroundTransparency = on and 0.5 or 1
-								lb.TextColor3 = on and PALETTE.Accent or PALETTE.Text
-							end
-						end
-					end
+					refreshDropdownItems(PALETTE)
 					pcall(cb, v)
 				end
 				function obj:Get() return sel end
@@ -849,7 +964,21 @@ function BlackwineLib:CreateWindow(opts)
 					for _, ch in ipairs(dlc:GetChildren()) do if ch:IsA("TextButton") then ch:Destroy() end end
 					if not keep or not table.find(newItems, sel) then sel = newItems[1] or ""; selLbl.Text = tostring(sel) end
 					for _, v in ipairs(newItems) do mkItem(v) end
+					if open then
+						tw(dl, TWEEN_SMOOTH, { Size = UDim2.new(1, 0, 0, math.min(#itms * 29 + 9, 180)) })
+					end
+					refreshDropdownItems(PALETTE)
 				end
+				onThemeChanged(function(p)
+					hdr.BackgroundColor3 = p.SurfaceLight
+					dropdownLabel.TextColor3 = p.Text
+					selLbl.TextColor3 = p.Accent
+					arr.ImageColor3 = p.TextDim
+					dl.BackgroundColor3 = p.Surface
+					dlStroke.Color = p.Border
+					dl.ScrollBarImageColor3 = p.Divider
+					refreshDropdownItems(p)
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -858,10 +987,11 @@ function BlackwineLib:CreateWindow(opts)
 			function S:AddInput(o)
 				o = o or {}
 				local cb = o.Callback or function() end
+				local isFocused = false
 
 				local c = create("Frame", { Size = UDim2.new(1, 0, 0, COMPONENT_HEIGHT + 20), BackgroundTransparency = 1, Parent = items })
 
-				create("TextLabel", {
+				local inputLabel = create("TextLabel", {
 					Size = UDim2.new(1, 0, 0, 18), Position = UDim2.new(0, 2, 0, 0),
 					BackgroundTransparency = 1, Text = o.Name or "Input",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -886,10 +1016,12 @@ function BlackwineLib:CreateWindow(opts)
 				})
 
 				tb.Focused:Connect(function()
+					isFocused = true
 					tw(ins, TWEEN_FAST, { Color = PALETTE.Accent, Transparency = 0 })
 					tw(inf, TWEEN_FAST, { BackgroundTransparency = 0.15 })
 				end)
 				tb.FocusLost:Connect(function()
+					isFocused = false
 					tw(ins, TWEEN_FAST, { Color = PALETTE.Border, Transparency = 0.5 })
 					tw(inf, TWEEN_FAST, { BackgroundTransparency = 0.3 })
 					local val = tb.Text
@@ -900,6 +1032,14 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) tb.Text = tostring(v); pcall(cb, v) end
 				function obj:Get() return o.Numeric and tonumber(tb.Text) or tb.Text end
+				onThemeChanged(function(p)
+					inputLabel.TextColor3 = p.Text
+					inf.BackgroundColor3 = p.SurfaceLight
+					ins.Color = isFocused and p.Accent or p.Border
+					ins.Transparency = isFocused and 0 or 0.5
+					tb.TextColor3 = p.Text
+					tb.PlaceholderColor3 = p.TextMuted
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -936,7 +1076,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(hdr, CORNER_SM)
 
-				create("TextLabel", {
+				local multiLabel = create("TextLabel", {
 					Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0),
 					BackgroundTransparency = 1, Text = o.Name or "Multi Select",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -955,12 +1095,18 @@ function BlackwineLib:CreateWindow(opts)
 					Image = "rbxassetid://6031091004", ImageColor3 = PALETTE.TextDim, Parent = hdr,
 				})
 
-				local ol = create("Frame", {
+				local ol = create("ScrollingFrame", {
 					Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = PALETTE.Surface,
 					BackgroundTransparency = 0.1, BorderSizePixel = 0, ClipsDescendants = true,
+					CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ScrollBarThickness = 2, ScrollBarImageColor3 = PALETTE.Divider,
+					ScrollBarImageTransparency = 0.35,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
 					Visible = false, LayoutOrder = 1, Parent = c,
 				})
-				corner(ol, CORNER_SM); stroke(ol, PALETTE.Border, 1, 0.5)
+				local olStroke = stroke(ol, PALETTE.Border, 1, 0.5)
+				corner(ol, CORNER_SM)
 
 				local olc = create("Frame", {
 					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
@@ -969,6 +1115,23 @@ function BlackwineLib:CreateWindow(opts)
 				local oll = listLayout(olc, 1); oll.HorizontalAlignment = Enum.HorizontalAlignment.Center
 				pad(olc, 4, 4, 4, 4)
 				local cll = listLayout(c, 4); cll.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+				local function refreshMultiItems(p)
+					for _, ch in ipairs(olc:GetChildren()) do
+						if ch:IsA("TextButton") then
+							ch.BackgroundColor3 = p.SurfaceLight
+							local lb = ch:FindFirstChildWhichIsA("TextLabel")
+							local cb3 = ch:FindFirstChild("checkbox")
+							if lb and cb3 then
+								local on = sels[lb.Text] or false
+								cb3.BackgroundColor3 = on and p.Accent or p.Toggle_Off
+								local cmk = cb3:FindFirstChildWhichIsA("ImageLabel")
+								if cmk then cmk.ImageTransparency = on and 0 or 1 end
+								lb.TextColor3 = on and p.Text or p.TextDim
+							end
+						end
+					end
+				end
 
 				local function mkItem(txt)
 					local it = create("TextButton", {
@@ -1035,22 +1198,20 @@ function BlackwineLib:CreateWindow(opts)
 				function obj:Set(list)
 					sels = {}; for _, v in ipairs(list) do sels[v] = true end
 					selLbl.Text = getText()
-					for _, ch in ipairs(olc:GetChildren()) do
-						if ch:IsA("TextButton") then
-							local lb = ch:FindFirstChildWhichIsA("TextLabel")
-							local cb3 = ch:FindFirstChild("checkbox")
-							if lb and cb3 then
-								local on = sels[lb.Text] or false
-								cb3.BackgroundColor3 = on and PALETTE.Accent or PALETTE.Toggle_Off
-								local cmk = cb3:FindFirstChildWhichIsA("ImageLabel")
-								if cmk then cmk.ImageTransparency = on and 0 or 1 end
-								lb.TextColor3 = on and PALETTE.Text or PALETTE.TextDim
-							end
-						end
-					end
+					refreshMultiItems(PALETTE)
 					pcall(o.Callback or function() end, getList())
 				end
 				function obj:Get() return getList() end
+				onThemeChanged(function(p)
+					hdr.BackgroundColor3 = p.SurfaceLight
+					multiLabel.TextColor3 = p.Text
+					selLbl.TextColor3 = p.Accent
+					arr.ImageColor3 = p.TextDim
+					ol.BackgroundColor3 = p.Surface
+					olStroke.Color = p.Border
+					ol.ScrollBarImageColor3 = p.Divider
+					refreshMultiItems(p)
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -1071,7 +1232,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(kb, CORNER_SM)
 
-				create("TextLabel", {
+				local keybindLabel = create("TextLabel", {
 					Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0),
 					BackgroundTransparency = 1, Text = o.Name or "Keybind",
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -1092,7 +1253,7 @@ function BlackwineLib:CreateWindow(opts)
 					if listening then return end
 					listening = true; kl.Text = "..."; tw(kl, TWEEN_FAST, { TextColor3 = PALETTE.Accent })
 					local conn
-					conn = UserInputService.InputBegan:Connect(function(input)
+					conn = trackConnection(UserInputService.InputBegan:Connect(function(input)
 						if input.UserInputType == Enum.UserInputType.Keyboard then
 							listening = false; conn:Disconnect()
 							if input.KeyCode == Enum.KeyCode.Escape then
@@ -1102,10 +1263,10 @@ function BlackwineLib:CreateWindow(opts)
 							end
 							tw(kl, TWEEN_FAST, { TextColor3 = PALETTE.TextDim })
 						end
-					end)
+					end))
 				end)
 
-				UserInputService.InputBegan:Connect(function(input, gpe)
+				connect(UserInputService.InputBegan, function(input, gpe)
 					if gpe or listening then return end
 					if input.KeyCode == key and key ~= Enum.KeyCode.Unknown then pcall(cb, key) end
 				end)
@@ -1116,16 +1277,25 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(k) key = k; kl.Text = k == Enum.KeyCode.Unknown and "..." or k.Name end
 				function obj:Get() return key end
+				onThemeChanged(function(p)
+					kb.BackgroundColor3 = p.SurfaceLight
+					keybindLabel.TextColor3 = p.Text
+					kl.BackgroundColor3 = p.Surface
+					kl.TextColor3 = listening and p.Accent or p.TextDim
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
 
 			-- ────────── SEPARATOR ──────────
 			function S:AddSeparator()
-				create("Frame", {
+				local sep = create("Frame", {
 					Size = UDim2.new(1, -8, 0, 1), BackgroundColor3 = PALETTE.Divider,
 					BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = items,
 				})
+				onThemeChanged(function(p)
+					sep.BackgroundColor3 = p.Divider
+				end)
 			end
 
 			-- ────────── COLOR PICKER ──────────
@@ -1137,6 +1307,7 @@ function BlackwineLib:CreateWindow(opts)
 				local curColor = default
 				local curH, curS, curV = default:ToHSV()
 				local pickerOpen = false
+				local hexFocused = false
 
 				local c = create("Frame", {
 					Size = UDim2.new(1, 0, 0, COMPONENT_HEIGHT),
@@ -1153,7 +1324,7 @@ function BlackwineLib:CreateWindow(opts)
 				})
 				corner(hdr, CORNER_SM)
 
-				create("TextLabel", {
+				local colorLabel = create("TextLabel", {
 					Size = UDim2.new(1, -46, 1, 0), Position = UDim2.new(0, 10, 0, 0),
 					BackgroundTransparency = 1, Text = cpName,
 					TextColor3 = PALETTE.Text, TextSize = 13, FontFace = FONT_MEDIUM,
@@ -1167,7 +1338,7 @@ function BlackwineLib:CreateWindow(opts)
 					BackgroundColor3 = curColor, BorderSizePixel = 0, Parent = hdr,
 				})
 				corner(swatch, CORNER_SM)
-				stroke(swatch, PALETTE.Border, 1, 0.3)
+				local swatchStroke = stroke(swatch, PALETTE.Border, 1, 0.3)
 
 				-- Picker panel
 				local panel = create("Frame", {
@@ -1177,7 +1348,8 @@ function BlackwineLib:CreateWindow(opts)
 					BorderSizePixel = 0, ClipsDescendants = true,
 					Visible = false, LayoutOrder = 1, Parent = c,
 				})
-				corner(panel, CORNER_SM); stroke(panel, PALETTE.Border, 1, 0.5)
+				local panelStroke = stroke(panel, PALETTE.Border, 1, 0.5)
+				corner(panel, CORNER_SM)
 
 				local panelContent = create("Frame", {
 					Size = UDim2.new(1, -16, 0, 140),
@@ -1289,7 +1461,7 @@ function BlackwineLib:CreateWindow(opts)
 				end
 
 				-- Hex label + input
-				create("TextLabel", {
+				local hexLabel = create("TextLabel", {
 					Size = UDim2.new(0, 28, 1, 0),
 					BackgroundTransparency = 1, Text = "HEX",
 					TextColor3 = PALETTE.TextMuted, TextSize = 10, FontFace = FONT,
@@ -1318,9 +1490,11 @@ function BlackwineLib:CreateWindow(opts)
 				})
 
 				hexBox.Focused:Connect(function()
+					hexFocused = true
 					tw(hexStroke, TWEEN_FAST, { Color = PALETTE.Accent, Transparency = 0 })
 				end)
 				hexBox.FocusLost:Connect(function()
+					hexFocused = false
 					tw(hexStroke, TWEEN_FAST, { Color = PALETTE.Border, Transparency = 0.5 })
 					local txt = hexBox.Text:gsub("#", "")
 					if #txt == 6 then
@@ -1403,6 +1577,19 @@ function BlackwineLib:CreateWindow(opts)
 					updateColor(h2, s2, v2, false)
 				end
 				function obj:Get() return curColor end
+				onThemeChanged(function(p)
+					hdr.BackgroundColor3 = p.SurfaceLight
+					colorLabel.TextColor3 = p.Text
+					swatchStroke.Color = p.Border
+					panel.BackgroundColor3 = p.Surface
+					panelStroke.Color = p.Border
+					hexLabel.TextColor3 = p.TextMuted
+					hexFrame.BackgroundColor3 = p.SurfaceLight
+					hexStroke.Color = hexFocused and p.Accent or p.Border
+					hexStroke.Transparency = hexFocused and 0 or 0.5
+					hexBox.TextColor3 = p.Text
+					hexBox.PlaceholderColor3 = p.TextMuted
+				end)
 				if o.Flag then W[o.Flag] = obj end
 				return obj
 			end
@@ -1425,6 +1612,15 @@ function BlackwineLib:CreateWindow(opts)
 		BackgroundTransparency = 1, Parent = gui,
 	})
 	local nl = listLayout(nc, 6); nl.VerticalAlignment = Enum.VerticalAlignment.Bottom; nl.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	onThemeChanged(function(p)
+		tabScroll.ScrollBarImageColor3 = p.Divider
+		titleLabel.TextColor3 = p.Text
+		extendBtn.ImageColor3 = W.SidebarOpen and p.TextDim or p.Accent
+		minBtn.ImageColor3 = p.TextMuted
+		topbarDivider.BackgroundColor3 = p.Divider
+		sidebarDivider.BackgroundColor3 = p.Divider
+		accentDot.BackgroundColor3 = p.Accent
+	end)
 
 	function W:Notify(o)
 		o = o or {}
@@ -1440,7 +1636,8 @@ function BlackwineLib:CreateWindow(opts)
 			BackgroundColor3 = PALETTE.Surface, BackgroundTransparency = 1,
 			BorderSizePixel = 0, ClipsDescendants = true, Parent = nc,
 		})
-		corner(nf, CORNER_MD); stroke(nf, PALETTE.Divider, 1, 0.4)
+		local nfStroke = stroke(nf, PALETTE.Divider, 1, 0.4)
+		corner(nf, CORNER_MD)
 
 		create("Frame", { Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = ac, BorderSizePixel = 0, Parent = nf })
 
@@ -1450,13 +1647,14 @@ function BlackwineLib:CreateWindow(opts)
 		})
 		pad(nfc, 8, 8, 8, 8); listLayout(nfc, 2)
 
-		create("TextLabel", {
+		local notifTitle = create("TextLabel", {
 			Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
 			Text = o.Title or "Notification", TextColor3 = PALETTE.Text,
 			TextSize = 13, FontFace = FONT_SEMI, TextXAlignment = Enum.TextXAlignment.Left, Parent = nfc,
 		})
+		local notifMessage
 		if (o.Message or "") ~= "" then
-			create("TextLabel", {
+			notifMessage = create("TextLabel", {
 				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
 				BackgroundTransparency = 1, Text = o.Message,
 				TextColor3 = PALETTE.TextDim, TextSize = 12, FontFace = FONT_REGULAR,
@@ -1472,24 +1670,44 @@ function BlackwineLib:CreateWindow(opts)
 
 		tw(nf, TWEEN_SMOOTH, { BackgroundTransparency = 0.05 })
 		tw(pb, TweenInfo.new(dur, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) })
+		onThemeChanged(function(p)
+			nf.BackgroundColor3 = p.Surface
+			nfStroke.Color = p.Divider
+			notifTitle.TextColor3 = p.Text
+			if notifMessage then notifMessage.TextColor3 = p.TextDim end
+		end)
 		task.delay(dur, function()
 			tw(nf, TWEEN_FAST, { BackgroundTransparency = 1 })
 			task.delay(0.2, function() nf:Destroy() end)
 		end)
 	end
 
-	function W:Destroy() gui:Destroy() end
+	function W:Destroy()
+		if self._destroyed then return end
+		self._destroyed = true
+		for _, conn in ipairs(self._connections) do
+			pcall(function() conn:Disconnect() end)
+		end
+		self._connections = {}
+		self._themeCallbacks = {}
+		if BlackwineLib._activeWindow == self then
+			BlackwineLib._activeWindow = nil
+		end
+		if gui and gui.Parent then
+			gui:Destroy()
+		end
+	end
 
 	-- ═══════════  Theming API  ═══════════
-	W._themeCallbacks = {}
 
 	--- Apply a preset theme by name ("Dark", "Midnight", "Dimmed", "Light")
 	--- or pass a custom base table. Preserves the current accent.
 	function W:SetTheme(themeName)
-		local base = THEME_PRESETS[themeName]
+		local base, resolvedName = resolveThemeBase(themeName)
 		if not base then warn("[blackwine] Unknown theme: " .. tostring(themeName)); return end
 		local newP = buildPalette(base, PALETTE.Accent)
 		for k, v in pairs(newP) do PALETTE[k] = v end
+		self._themeName = resolvedName
 		self:_refreshTheme()
 	end
 
@@ -1506,26 +1724,14 @@ function BlackwineLib:CreateWindow(opts)
 	end
 
 	--- Internal: re-skin the persistent chrome (topbar, sidebar, main frame).
-	--- Components read PALETTE at interaction time, so they auto-pick up changes.
+	--- Components register callbacks so existing controls re-skin in place.
 	function W:_refreshTheme()
 		-- Main frame
 		tw(main, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Background })
 		-- Topbar
-		local tb = main:FindFirstChild("topbar")
-		if tb then tw(tb, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Surface }) end
+		tw(topbar, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Surface })
 		-- Sidebar
-		local sb = content:FindFirstChild("sidebar")
-		if sb then tw(sb, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Surface }) end
-		-- Accent dot
-		if tb then
-			local dot = tb:FindFirstChild("accent_dot")
-			if dot then tw(dot, TWEEN_FAST, { BackgroundColor3 = PALETTE.Accent }) end
-		end
-		-- Tab sidebar indicators & active tab
-		if self.ActiveTab then
-			local at = self.ActiveTab
-			if at._ind then tw(at._ind, TWEEN_FAST, { BackgroundColor3 = PALETTE.Accent }) end
-		end
+		tw(sidebar, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Surface })
 		-- Fire registered callbacks
 		for _, fn in ipairs(self._themeCallbacks) do pcall(fn, PALETTE) end
 	end
@@ -1552,12 +1758,15 @@ function BlackwineLib:CreateWindow(opts)
 		presetSection:AddLabel({ Text = "Select a base theme preset." })
 
 		-- Determine current theme name
-		local currentThemeName = "Dark"
+		local currentThemeName = self._themeName or "Dark"
 		local themeNames = {}
 		for name in pairs(THEME_PRESETS) do
 			table.insert(themeNames, name)
 		end
 		table.sort(themeNames)
+		if not table.find(themeNames, currentThemeName) then
+			currentThemeName = themeNames[1]
+		end
 
 		local presetDrop = presetSection:AddDropdown({
 			Name = "Base Theme",
@@ -1698,6 +1907,7 @@ function BlackwineLib:CreateWindow(opts)
 		return themeTab
 	end
 
+	BlackwineLib._activeWindow = W
 	W._gui = gui; W._main = main
 	return W
 end
