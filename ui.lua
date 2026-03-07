@@ -1,4 +1,5 @@
 -- Blackwine UI Library
+-- Executor-ready UI framework with full component suite
 -- Usage:
 --   local Library = loadstring(...)()
 --   local Window = Library:CreateWindow({ Title = "blackwine" })
@@ -221,6 +222,7 @@ function BlackwineLib:CreateWindow(opts)
 
 	local W = {
 		Tabs = {},
+		Flags = {},
 		ActiveTab = nil,
 		SidebarOpen = true,
 		Toggled = true,
@@ -239,9 +241,23 @@ function BlackwineLib:CreateWindow(opts)
 		return trackConnection(signal:Connect(fn))
 	end
 
-	local function onThemeChanged(fn)
-		table.insert(W._themeCallbacks, fn)
-		return fn
+	local function bindFlag(flag, obj)
+		if not flag then return end
+		W.Flags[flag] = obj
+		W[flag] = obj
+	end
+
+	local function onThemeChanged(target, fn)
+		if fn == nil then
+			fn = target
+			target = nil
+		end
+		local entry = { target = target, fn = fn }
+		table.insert(W._themeCallbacks, entry)
+		if not target or target.Parent ~= nil then
+			pcall(fn, PALETTE)
+		end
+		return entry
 	end
 
 	if BlackwineLib._activeWindow and BlackwineLib._activeWindow ~= W then
@@ -255,14 +271,17 @@ function BlackwineLib:CreateWindow(opts)
 			local newP = buildPalette(base, accent)
 			for k, v in pairs(newP) do PALETTE[k] = v end
 			W._themeName = themeName
+		else
+			warn("[blackwine] Unknown theme: " .. tostring(opts.Theme))
 		end
-		elseif opts.Accent then
-			local al, ad = accentShade(opts.Accent)
-			PALETTE.Accent = opts.Accent
-			PALETTE.AccentLight = al
-			PALETTE.AccentDark = ad
-			PALETTE.Toggle_On = opts.Accent
-			PALETTE.SliderFill = opts.Accent
+	end
+	if opts.Accent then
+		local al, ad = accentShade(opts.Accent)
+		PALETTE.Accent = opts.Accent
+		PALETTE.AccentLight = al
+		PALETTE.AccentDark = ad
+		PALETTE.Toggle_On = opts.Accent
+		PALETTE.SliderFill = opts.Accent
 	end
 
 	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -480,7 +499,7 @@ function BlackwineLib:CreateWindow(opts)
 		pad(frame, 8, 0, 8, 0)
 		T._frame = frame
 
-		onThemeChanged(function(p)
+		onThemeChanged(btn, function(p)
 			local active = W.ActiveTab == T
 			btn.BackgroundColor3 = p.Accent
 			lbl.TextColor3 = active and p.Text or p.TextDim
@@ -553,7 +572,7 @@ function BlackwineLib:CreateWindow(opts)
 			local ml = listLayout(sf, 2); ml.HorizontalAlignment = Enum.HorizontalAlignment.Center
 			S._f = sf; S._items = items
 
-			onThemeChanged(function(p)
+			onThemeChanged(sf, function(p)
 				sf.BackgroundColor3 = p.Surface
 				sfStroke.Color = p.Divider
 				headerLabel.TextColor3 = p.TextMuted
@@ -577,7 +596,7 @@ function BlackwineLib:CreateWindow(opts)
 				function obj:Set(t) l.Text = t end
 				function obj:SetColor(col) l.TextColor3 = col end
 				if not o.Color then
-					onThemeChanged(function(p)
+					onThemeChanged(l, function(p)
 						l.TextColor3 = p.TextDim
 					end)
 				end
@@ -621,7 +640,7 @@ function BlackwineLib:CreateWindow(opts)
 
 				local obj = {}
 				function obj:SetText(t) bl.Text = t end
-				onThemeChanged(function(p)
+				onThemeChanged(b, function(p)
 					b.BackgroundColor3 = p.SurfaceLight
 					bStroke.Color = p.Border
 					bl.TextColor3 = p.Text
@@ -694,13 +713,13 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) if state == v then return end; state = v; vis(state, true); pcall(cb, state) end
 				function obj:Get() return state end
-				onThemeChanged(function(p)
+				onThemeChanged(tb, function(p)
 					tb.BackgroundColor3 = p.SurfaceLight
 					toggleLabel.TextColor3 = p.Text
 					track.BackgroundColor3 = state and p.Toggle_On or p.Toggle_Off
 					knob.BackgroundColor3 = p.White
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -809,7 +828,7 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) setVal(v, true) end
 				function obj:Get() return cur end
-				onThemeChanged(function(p)
+				onThemeChanged(sf, function(p)
 					sf.BackgroundColor3 = p.SurfaceLight
 					sliderLabel.TextColor3 = p.Text
 					vl.TextColor3 = p.Accent
@@ -819,7 +838,7 @@ function BlackwineLib:CreateWindow(opts)
 					skStroke.Color = p.Accent
 					glow.BackgroundColor3 = p.Accent
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -969,7 +988,7 @@ function BlackwineLib:CreateWindow(opts)
 					end
 					refreshDropdownItems(PALETTE)
 				end
-				onThemeChanged(function(p)
+				onThemeChanged(hdr, function(p)
 					hdr.BackgroundColor3 = p.SurfaceLight
 					dropdownLabel.TextColor3 = p.Text
 					selLbl.TextColor3 = p.Accent
@@ -979,7 +998,7 @@ function BlackwineLib:CreateWindow(opts)
 					dl.ScrollBarImageColor3 = p.Divider
 					refreshDropdownItems(p)
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -1032,7 +1051,7 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(v) tb.Text = tostring(v); pcall(cb, v) end
 				function obj:Get() return o.Numeric and tonumber(tb.Text) or tb.Text end
-				onThemeChanged(function(p)
+				onThemeChanged(inf, function(p)
 					inputLabel.TextColor3 = p.Text
 					inf.BackgroundColor3 = p.SurfaceLight
 					ins.Color = isFocused and p.Accent or p.Border
@@ -1040,7 +1059,7 @@ function BlackwineLib:CreateWindow(opts)
 					tb.TextColor3 = p.Text
 					tb.PlaceholderColor3 = p.TextMuted
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -1202,7 +1221,7 @@ function BlackwineLib:CreateWindow(opts)
 					pcall(o.Callback or function() end, getList())
 				end
 				function obj:Get() return getList() end
-				onThemeChanged(function(p)
+				onThemeChanged(hdr, function(p)
 					hdr.BackgroundColor3 = p.SurfaceLight
 					multiLabel.TextColor3 = p.Text
 					selLbl.TextColor3 = p.Accent
@@ -1212,7 +1231,7 @@ function BlackwineLib:CreateWindow(opts)
 					ol.ScrollBarImageColor3 = p.Divider
 					refreshMultiItems(p)
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -1277,13 +1296,13 @@ function BlackwineLib:CreateWindow(opts)
 				local obj = {}
 				function obj:Set(k) key = k; kl.Text = k == Enum.KeyCode.Unknown and "..." or k.Name end
 				function obj:Get() return key end
-				onThemeChanged(function(p)
+				onThemeChanged(kb, function(p)
 					kb.BackgroundColor3 = p.SurfaceLight
 					keybindLabel.TextColor3 = p.Text
 					kl.BackgroundColor3 = p.Surface
 					kl.TextColor3 = listening and p.Accent or p.TextDim
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -1293,7 +1312,7 @@ function BlackwineLib:CreateWindow(opts)
 					Size = UDim2.new(1, -8, 0, 1), BackgroundColor3 = PALETTE.Divider,
 					BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = items,
 				})
-				onThemeChanged(function(p)
+				onThemeChanged(sep, function(p)
 					sep.BackgroundColor3 = p.Divider
 				end)
 			end
@@ -1577,7 +1596,7 @@ function BlackwineLib:CreateWindow(opts)
 					updateColor(h2, s2, v2, false)
 				end
 				function obj:Get() return curColor end
-				onThemeChanged(function(p)
+				onThemeChanged(hdr, function(p)
 					hdr.BackgroundColor3 = p.SurfaceLight
 					colorLabel.TextColor3 = p.Text
 					swatchStroke.Color = p.Border
@@ -1590,7 +1609,7 @@ function BlackwineLib:CreateWindow(opts)
 					hexBox.TextColor3 = p.Text
 					hexBox.PlaceholderColor3 = p.TextMuted
 				end)
-				if o.Flag then W[o.Flag] = obj end
+				bindFlag(o.Flag, obj)
 				return obj
 			end
 
@@ -1612,7 +1631,7 @@ function BlackwineLib:CreateWindow(opts)
 		BackgroundTransparency = 1, Parent = gui,
 	})
 	local nl = listLayout(nc, 6); nl.VerticalAlignment = Enum.VerticalAlignment.Bottom; nl.HorizontalAlignment = Enum.HorizontalAlignment.Right
-	onThemeChanged(function(p)
+	onThemeChanged(main, function(p)
 		tabScroll.ScrollBarImageColor3 = p.Divider
 		titleLabel.TextColor3 = p.Text
 		extendBtn.ImageColor3 = W.SidebarOpen and p.TextDim or p.Accent
@@ -1670,7 +1689,7 @@ function BlackwineLib:CreateWindow(opts)
 
 		tw(nf, TWEEN_SMOOTH, { BackgroundTransparency = 0.05 })
 		tw(pb, TweenInfo.new(dur, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) })
-		onThemeChanged(function(p)
+		onThemeChanged(nf, function(p)
 			nf.BackgroundColor3 = p.Surface
 			nfStroke.Color = p.Divider
 			notifTitle.TextColor3 = p.Text
@@ -1733,12 +1752,20 @@ function BlackwineLib:CreateWindow(opts)
 		-- Sidebar
 		tw(sidebar, TWEEN_SMOOTH, { BackgroundColor3 = PALETTE.Surface })
 		-- Fire registered callbacks
-		for _, fn in ipairs(self._themeCallbacks) do pcall(fn, PALETTE) end
+		for i = #self._themeCallbacks, 1, -1 do
+			local entry = self._themeCallbacks[i]
+			if entry.target and entry.target.Parent == nil then
+				table.remove(self._themeCallbacks, i)
+			else
+				pcall(entry.fn, PALETTE)
+			end
+		end
 	end
 
 	--- Register a callback that fires whenever the theme or accent changes.
-	function W:OnThemeChanged(fn)
-		table.insert(self._themeCallbacks, fn)
+	--- Pass a target Instance to auto-prune the callback when that UI is destroyed.
+	function W:OnThemeChanged(target, fn)
+		return onThemeChanged(target, fn)
 	end
 
 	-- ══════════════════════════════════════════════════
@@ -1767,12 +1794,15 @@ function BlackwineLib:CreateWindow(opts)
 		if not table.find(themeNames, currentThemeName) then
 			currentThemeName = themeNames[1]
 		end
+		local syncingPreset = false
 
 		local presetDrop = presetSection:AddDropdown({
 			Name = "Base Theme",
 			Items = themeNames,
 			Default = currentThemeName,
+			Flag = "ThemePreset",
 			Callback = function(selected)
+				if syncingPreset then return end
 				self:SetTheme(selected)
 			end,
 		})
@@ -1899,6 +1929,11 @@ function BlackwineLib:CreateWindow(opts)
 
 		-- Also sync when theme changes from external SetTheme/SetAccent calls
 		self:OnThemeChanged(function()
+			if self._themeName and table.find(themeNames, self._themeName) and presetDrop:Get() ~= self._themeName then
+				syncingPreset = true
+				presetDrop:Set(self._themeName)
+				syncingPreset = false
+			end
 			if self._themePickerSync then
 				self._themePickerSync()
 			end
