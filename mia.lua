@@ -3046,18 +3046,7 @@ playersService.PlayerRemoving:Connect(cleanupAutoBlock)
 -- ═══════ UI ═══════
 
 task.spawn(function()
-local uiOk, BlackwineLib = pcall(function()
-	return loadstring(game:HttpGet("https://raw.githubusercontent.com/gfn8879-hub/blackwine/refs/heads/main/ui.lua"))()
-end)
-
-if not uiOk or not BlackwineLib then
-	logger.warn("failed to load UI library — running headless")
-    logger.warn(tostring(BlackwineLib))
-	return
-end
-
-BlackwineLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/gfn8879-hub/blackwine/refs/heads/main/ui.lua"))()
-
+local BlackwineLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/gfn8879-hub/blackwine/refs/heads/main/ui.lua"))()
 local Window = BlackwineLib:CreateWindow({
 	Title = "blackwine",
 	Size = UDim2.fromOffset(640, 440),
